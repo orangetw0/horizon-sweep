@@ -41,6 +41,8 @@ html,body{height:100%;margin:0;background:#000;color:var(--ink);font-family:var(
   -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);display:flex;align-items:center;gap:6px}
 .chip i{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block}
 .chip.ok i{background:var(--ok)} .chip.warn i{background:var(--line)} .chip.bad i{background:var(--rec)}
+.chip.tap{pointer-events:auto;color:var(--ink);font-family:var(--font);min-height:32px}
+.chip.tap.on{border-color:var(--line);color:var(--line)}
 .chip.rec{border-color:var(--rec);color:#fff} .chip.rec i{background:var(--rec);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.chip.rec i{animation:none}}
@@ -106,6 +108,7 @@ hr{border:0;border-top:1px solid var(--edge);margin:0;width:100%}
   </div>
   <div class="chips">
     <div class="chip" id="headChip"><i></i><span id="headTxt">Waiting for compass</span></div>
+    <button class="chip tap" id="nightChip" type="button" aria-label="Night brightness boost">Night off</button>
     <div class="chip rec" id="recChip" style="display:none"><i></i><span>Recording</span></div>
   </div>
 </div>
@@ -142,6 +145,21 @@ hr{border:0;border-top:1px solid var(--edge);margin:0;width:100%}
       <button class="btn" id="unsyncBtn" type="button">Use compass</button>
     </div>
     <small>More accurate than the compass. Put the crosshair on something whose true azimuth you know (a landmark from a map, or Polaris at about 0°), type the azimuth, then tap. The compass and declination are ignored until you tap Use compass.</small>
+  </div>
+  <hr>
+  <div class="field">
+    <label for="boostIn">Night brightness boost: <span id="boostTxt">off</span></label>
+    <div class="row"><input id="boostIn" type="range" min="1" max="12" step="0.5" value="1"></div>
+    <label class="check"><input type="checkbox" id="slowChk"> Slow shutter (lower frame rate so the camera can expose longer)</label>
+    <small>Boost brightens the picture on screen. It also brightens noise, so use the lowest setting that shows the skyline. The Night button on the main screen steps through off, 2×, 4× and 8×.</small>
+  </div>
+  <div class="field" id="camCtl" style="display:none">
+    <label>Camera exposure</label>
+    <div id="camRows" style="display:flex;flex-direction:column;gap:10px"></div>
+    <small>Offered only where the browser lets a page set them.</small>
+  </div>
+  <div class="field" id="camNone" style="display:none">
+    <small>This browser does not let a web page set ISO or exposure directly, so the boost above is the control to use.</small>
   </div>
   <hr>
   <div class="field">
@@ -502,6 +520,51 @@ $('copyBtn').addEventListener('click',function(){
   if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(function(){toast('Copied');},fallback); else fallback();
 });
 
+/* ---------- night view ---------- */
+var boost=+load('hrz.boost',1)||1, slow=!!load('hrz.slow',false), track=null;
+function applyBoost(){
+  var v=$('cam'), f=boost>1?'brightness('+boost+')':'';
+  v.style.webkitFilter=f; v.style.filter=f;
+  var t=boost>1?(Math.round(boost*10)/10)+'\u00d7':'off';
+  $('boostTxt').textContent=t; $('boostIn').value=boost;
+  $('nightChip').textContent='Night '+t; $('nightChip').classList.toggle('on',boost>1);
+  store('hrz.boost',boost);
+}
+function applySlow(){
+  $('slowChk').checked=slow; store('hrz.slow',slow);
+  if(!track||!track.applyConstraints) return;
+  track.applyConstraints({frameRate:slow?{ideal:10,max:15}:{ideal:30}}).catch(function(){ if(slow) toast('Slow shutter is not available on this camera'); });
+}
+function camSet(obj){ if(track) track.applyConstraints({advanced:[obj]}).catch(function(){toast('The camera refused that setting');}); }
+function camSlider(label,cap,cur,unit,fn){
+  var min=cap.min,max=cap.max,step=cap.step||((max-min)/100);
+  var row=document.createElement('div'); row.className='row';
+  var l=document.createElement('label'); l.style.cssText='font-size:13px;font-weight:500;min-width:120px';
+  var id='cam_'+label.replace(/\W/g,''); l.htmlFor=id;
+  var inp=document.createElement('input'); inp.type='range'; inp.id=id; inp.min=min; inp.max=max; inp.step=step;
+  inp.value=(typeof cur==='number')?cur:min;
+  function show(){ l.textContent=label+': '+(+inp.value).toFixed(step<1?1:0)+unit; }
+  inp.addEventListener('input',function(){show();fn(+inp.value);}); show();
+  row.appendChild(l); row.appendChild(inp); $('camRows').appendChild(row);
+}
+function setupCamera(stream){
+  track=stream.getVideoTracks()[0]||null;
+  var caps={}, st={};
+  try{ if(track&&track.getCapabilities) caps=track.getCapabilities()||{}; if(track&&track.getSettings) st=track.getSettings()||{}; }catch(e){}
+  var n=0;
+  function ok(c){return c&&typeof c.min==='number'&&typeof c.max==='number'&&c.max>c.min;}
+  function manual(o){ if(caps.exposureMode&&caps.exposureMode.indexOf('manual')>=0) o.exposureMode='manual'; return o; }
+  if(ok(caps.exposureCompensation)){ n++; camSlider('Exposure',caps.exposureCompensation,st.exposureCompensation,' EV',function(v){camSet({exposureMode:'continuous',exposureCompensation:v});}); }
+  if(ok(caps.iso)){ n++; camSlider('ISO',caps.iso,st.iso,'',function(v){camSet(manual({iso:v}));}); }
+  if(ok(caps.exposureTime)){ n++; camSlider('Shutter',caps.exposureTime,st.exposureTime,'',function(v){camSet(manual({exposureTime:v}));}); }
+  $('camCtl').style.display=n?'':'none'; $('camNone').style.display=n?'none':'';
+  applyBoost(); if(slow) applySlow();
+}
+$('boostIn').addEventListener('input',function(){boost=+this.value;applyBoost();});
+$('slowChk').addEventListener('change',function(){slow=this.checked;applySlow();});
+$('nightChip').addEventListener('click',function(){ var steps=[1,2,4,8], i=0; while(i<steps.length&&steps[i]<=boost) i++; boost=steps[i%steps.length]; if(i>=steps.length) boost=1; applyBoost(); });
+applyBoost(); $('slowChk').checked=slow;
+
 /* ---------- start ---------- */
 var wake=null;
 function keepAwake(){ if(navigator.wakeLock&&document.visibilityState==='visible') navigator.wakeLock.request('screen').then(function(w){wake=w;}).catch(function(){}); }
@@ -523,7 +586,7 @@ $('startBtn').addEventListener('click',function(){
       return pC.catch(function(){ throw new Error('Camera access was refused. Allow the camera for this site in Safari (aA menu → Website Settings), then reload.'); });
     });
   }).then(function(stream){
-    var v=$('cam'); v.srcObject=stream; var pl=v.play(); if(pl&&pl.catch) pl.catch(function(){});
+    var v=$('cam'); v.srcObject=stream; setupCamera(stream); var pl=v.play(); if(pl&&pl.catch) pl.catch(function(){});
     window.addEventListener('deviceorientationabsolute',function(e){onOri(e,true);},true);
     window.addEventListener('deviceorientation',function(e){onOri(e,e.absolute===true&&typeof e.webkitCompassHeading!=='number');},true);
     window.addEventListener('devicemotion',onMotion,true);
