@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Horizon Sweep">
+<meta name="theme-color" content="#000000">
+<title>Horizon Sweep</title>
+<style>
+:root{
+  /* Layout: full-screen camera, HUD canvas on top, readout bar above, chart + controls below. Single dark theme by choice (camera HUD). */
+  color-scheme: dark;
+  --ink:#f4f1ea;
+  --dim:#a9a69d;
+  --panel:rgba(12,13,16,.68);
+  --edge:rgba(255,255,255,.14);
+  --line:#ffb000;      /* captured horizon */
+  --rec:#ff453a;       /* recording */
+  --ok:#5fd38d;
+  --font:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;background:#000;color:var(--ink);font-family:var(--font);overflow:hidden;
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
+#cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+#hud{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
+
+.top{position:fixed;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 12px) 8px calc(env(safe-area-inset-left) + 12px);
+  display:flex;gap:8px;align-items:flex-start;justify-content:space-between;pointer-events:none}
+.read{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:8px 12px;
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);font-family:var(--mono);font-variant-numeric:tabular-nums}
+.read .big{font-size:20px;font-weight:600;letter-spacing:.01em;white-space:nowrap}
+.read .big span{color:var(--dim);font-size:12px;font-weight:500;margin-right:4px}
+.read .big b{font-weight:600;margin-right:10px}
+.read .small{font-size:11px;color:var(--dim);margin-top:3px;white-space:nowrap}
+.chips{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.chip{background:var(--panel);border:1px solid var(--edge);border-radius:999px;padding:5px 10px;font-size:12px;white-space:nowrap;
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);display:flex;align-items:center;gap:6px}
+.chip i{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block}
+.chip.ok i{background:var(--ok)} .chip.warn i{background:var(--line)} .chip.bad i{background:var(--rec)}
+.chip.rec{border-color:var(--rec);color:#fff} .chip.rec i{background:var(--rec);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.chip.rec i{animation:none}}
+
+.bottom{position:fixed;left:0;right:0;bottom:0;padding:8px calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 10px) calc(env(safe-area-inset-left) + 12px);
+  background:linear-gradient(to top,rgba(0,0,0,.78),rgba(0,0,0,.45) 70%,transparent);display:flex;flex-direction:column;gap:8px}
+.chartHead{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--dim);font-family:var(--mono)}
+.chartHead button{background:none;border:0;color:var(--dim);font:inherit;padding:4px 0 4px 12px;text-decoration:underline}
+#chart{width:100%;height:76px;display:block;border-radius:8px;background:rgba(0,0,0,.45);border:1px solid var(--edge)}
+.controls{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px}
+.side{height:44px;min-width:92px;border-radius:12px;border:1px solid var(--edge);background:var(--panel);color:var(--ink);font:600 15px var(--font);padding:0 14px;
+  -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}
+.side:disabled{opacity:.4}
+.side.left{justify-self:start}.side.right{justify-self:end}
+.side.ready{border-color:var(--line);color:var(--line)}
+#rec{width:74px;height:74px;border-radius:50%;border:4px solid #fff;background:transparent;padding:0;display:grid;place-items:center}
+#rec span{display:block;width:56px;height:56px;border-radius:50%;background:var(--rec);transition:all .15s}
+#rec.on span{width:28px;height:28px;border-radius:7px}
+#recLabel{text-align:center;font-size:12px;color:var(--ink);margin-top:-2px}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--line);outline-offset:2px}
+
+#toast{position:fixed;left:50%;top:38%;transform:translateX(-50%);background:rgba(0,0,0,.8);border:1px solid var(--edge);border-radius:12px;padding:10px 16px;
+  font-size:15px;font-weight:600;text-align:center;max-width:80%;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}
+
+.cover{position:fixed;inset:0;background:#0b0c0f;display:flex;align-items:center;justify-content:center;padding:24px;z-index:20;overflow:auto}
+.cover .box{max-width:420px;display:flex;flex-direction:column;gap:14px}
+.cover h1{font-size:28px;margin:0;letter-spacing:-.01em}
+.cover p{margin:0;color:var(--dim);font-size:15px;line-height:1.45}
+.cover ol{margin:0;padding-left:20px;color:var(--ink);font-size:15px;line-height:1.5}
+.primary{height:52px;border-radius:14px;border:0;background:var(--line);color:#1a1200;font:700 17px var(--font);padding:0 18px}
+#startErr{color:var(--rec);font-size:14px;line-height:1.4}
+
+.sheet{position:fixed;left:0;right:0;bottom:0;max-height:88%;overflow:auto;-webkit-overflow-scrolling:touch;background:#15171c;border-top:1px solid var(--edge);
+  border-radius:18px 18px 0 0;padding:16px calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 18px) calc(env(safe-area-inset-left) + 16px);
+  z-index:10;display:none;flex-direction:column;gap:14px;-webkit-user-select:text;user-select:text}
+.sheet.open{display:flex}
+.sheet header{display:flex;justify-content:space-between;align-items:center}
+.sheet h2{font-size:18px;margin:0}
+.sheet .x{background:none;border:0;color:var(--line);font:600 16px var(--font);padding:6px 0 6px 16px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:14px;font-weight:600}
+.field small{color:var(--dim);font-size:13px;line-height:1.4}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input[type=number],select{height:44px;border-radius:10px;border:1px solid var(--edge);background:#0c0d10;color:var(--ink);font:16px var(--mono);padding:0 10px;width:110px}
+input[type=range]{flex:1;min-width:140px;accent-color:var(--line)}
+.btn{height:44px;border-radius:10px;border:1px solid var(--edge);background:#22252c;color:var(--ink);font:600 15px var(--font);padding:0 14px}
+.btn.go{background:var(--line);color:#1a1200;border-color:var(--line)}
+.check{display:flex;gap:8px;align-items:center;font-size:14px}
+.check input{width:20px;height:20px;accent-color:var(--line)}
+textarea{width:100%;height:150px;border-radius:10px;border:1px solid var(--edge);background:#0c0d10;color:var(--ink);font:13px/1.4 var(--mono);padding:10px;resize:none}
+hr{border:0;border-top:1px solid var(--edge);margin:0;width:100%}
+</style>
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="hud"></canvas>
+
+<div class="top">
+  <div class="read">
+    <div class="big"><span>AZ</span><b id="azTxt">–</b><span>ALT</span><b id="altTxt" style="margin-right:0">–</b></div>
+    <div class="small" id="sensTxt">gyro – · accel –</div>
+  </div>
+  <div class="chips">
+    <div class="chip" id="headChip"><i></i><span id="headTxt">Waiting for compass</span></div>
+    <div class="chip rec" id="recChip" style="display:none"><i></i><span>Recording</span></div>
+  </div>
+</div>
+
+<div id="toast" role="status"></div>
+
+<div class="bottom">
+  <div class="chartHead"><span id="covTxt">0 / 360° captured</span><button id="clearBtn" type="button">Clear</button></div>
+  <canvas id="chart"></canvas>
+  <div class="controls">
+    <button class="side left" id="setBtn" type="button">Settings</button>
+    <div>
+      <button id="rec" type="button" aria-label="Start sweep"><span></span></button>
+    </div>
+    <button class="side right" id="expBtn" type="button" disabled>Export</button>
+  </div>
+  <div id="recLabel">Aim the crosshair at the skyline, then tap to start</div>
+</div>
+
+<!-- Settings -->
+<div class="sheet" id="setSheet" role="dialog" aria-label="Settings">
+  <header><h2>Settings</h2><button class="x" type="button" data-close>Done</button></header>
+  <div class="field">
+    <label for="declIn">Magnetic declination (° east positive)</label>
+    <div class="row"><input id="declIn" type="number" step="0.1" value="0" inputmode="decimal"></div>
+    <small>The phone compass reads magnetic north. NINA expects true north. Enter your site's declination (west is negative).</small>
+  </div>
+  <hr>
+  <div class="field">
+    <label for="syncIn">Set heading from a known target</label>
+    <div class="row">
+      <input id="syncIn" type="number" step="0.1" min="0" max="360" placeholder="true az" inputmode="decimal">
+      <button class="btn go" id="syncBtn" type="button">Crosshair is on it</button>
+      <button class="btn" id="unsyncBtn" type="button">Use compass</button>
+    </div>
+    <small>More accurate than the compass. Put the crosshair on something whose true azimuth you know (a landmark from a map, or Polaris at about 0°), type the azimuth, then tap. The compass and declination are ignored until you tap Use compass.</small>
+  </div>
+  <hr>
+  <div class="field">
+    <label for="fovIn">Camera field of view, long side: <span id="fovTxt">62</span>°</label>
+    <div class="row"><input id="fovIn" type="range" min="40" max="95" step="1" value="62"></div>
+    <small>Only affects how the drawn line sits on the picture, not the recorded numbers. If the line slides off objects as you pan, adjust this until it sticks.</small>
+  </div>
+</div>
+
+<!-- Export -->
+<div class="sheet" id="expSheet" role="dialog" aria-label="Export">
+  <header><h2>Export horizon file</h2><button class="x" type="button" data-close>Done</button></header>
+  <div class="row">
+    <div class="field"><label for="stepSel">Azimuth step</label>
+      <select id="stepSel"><option value="1">1°</option><option value="2">2°</option><option value="5" selected>5°</option><option value="10">10°</option></select></div>
+    <div class="field" style="flex:1;min-width:180px;gap:10px">
+      <label class="check"><input type="checkbox" id="smoothChk" checked> Smooth hand shake</label>
+      <label class="check"><input type="checkbox" id="maxChk" checked> Use highest point in each step</label>
+      <label class="check"><input type="checkbox" id="clampChk" checked> No values below 0°</label>
+    </div>
+  </div>
+  <small id="expInfo" style="color:var(--dim);font-size:13px"></small>
+  <textarea id="expTxt" readonly aria-label="File contents"></textarea>
+  <div class="row">
+    <button class="btn go" id="shareBtn" type="button">Save / Share .hrz</button>
+    <button class="btn" id="dlBtn" type="button">Download</button>
+    <button class="btn" id="copyBtn" type="button">Copy text</button>
+  </div>
+  <small style="color:var(--dim);font-size:13px;line-height:1.4">Format: one line per point, azimuth then altitude in degrees, separated by a space, azimuth from true north. In NINA: Options → General → Astrometry → Custom horizon.</small>
+</div>
+
+<!-- Start -->
+<div class="cover" id="cover">
+  <div class="box">
+    <h1>Horizon Sweep</h1>
+    <p>Trace your local skyline with the phone camera and export it as a <b style="color:var(--ink)">.hrz</b> file for N.I.N.A.</p>
+    <ol>
+      <li>Stand where the telescope stands.</li>
+      <li>Put the crosshair on the top of the trees or roofline.</li>
+      <li>Tap the red button once, then turn a full circle, tilting the phone so the crosshair follows the skyline.</li>
+      <li>Export.</li>
+    </ol>
+    <button class="primary" id="startBtn" type="button">Enable camera and motion sensors</button>
+    <div id="startErr"></div>
+    <p style="font-size:13px">Before starting, wave the phone in a figure of eight to settle the compass, and keep away from cars and steel.</p>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+var D2R=Math.PI/180, R2D=180/Math.PI;
+function mod(a,n){return ((a%n)+n)%n;}
+function angDiff(a,b){return mod(a-b+180,360)-180;}           // signed a-b
+function $(id){return document.getElementById(id);}
+
+/* ---------- state ---------- */
+var R=null;                 // device->world rotation (row-major 3x3), from alpha/beta/gamma
+var azRel=0, alt=0, haveOri=false;
+var compassOffset=null;     // magnetic heading minus azRel
+var manualOffset=null;      // true heading minus azRel, set by "known target"
+var compassAcc=null, absoluteSeen=false;
+var decl=0, fovLong=62;
+var bins=new Float32Array(360); for(var i=0;i<360;i++) bins[i]=NaN;
+var recording=false, lastAz=null, lastAlt=null, autoStop=false;
+var gyroRate=null, accelG=null;
+
+function store(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+function load(k,d){try{var v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch(e){return d;}}
+decl=+load('hrz.decl',0)||0; fovLong=+load('hrz.fov',62)||62;
+(function(){var s=load('hrz.bins',null); if(s&&s.length===360) for(var i=0;i<360;i++) bins[i]=(s[i]==null?NaN:+s[i]);})();
+function saveBins(){var a=[];for(var i=0;i<360;i++)a.push(isNaN(bins[i])?null:Math.round(bins[i]*100)/100);store('hrz.bins',a);}
+
+function offset(){ if(manualOffset!=null) return manualOffset; if(compassOffset!=null) return compassOffset+decl; return 0; }
+function headingKnown(){return manualOffset!=null||compassOffset!=null;}
+function curAz(){return mod(azRel+offset(),360);}
+function coverage(){var n=0;for(var i=0;i<360;i++) if(!isNaN(bins[i])) n++; return n;}
+
+/* ---------- sensors ---------- */
+function onOri(e,isAbs){
+  if(e.alpha==null||e.beta==null||e.gamma==null) return;
+  if(isAbs) absoluteSeen=true; else if(absoluteSeen) return;
+  var a=e.alpha*D2R,b=e.beta*D2R,g=e.gamma*D2R;
+  var cA=Math.cos(a),sA=Math.sin(a),cB=Math.cos(b),sB=Math.sin(b),cG=Math.cos(g),sG=Math.sin(g);
+  R=[cA*cG-sA*sB*sG, -cB*sA, cG*sA*sB+cA*sG,
+     cG*sA+cA*sB*sG,  cA*cB, sA*sG-cA*cG*sB,
+     -cB*sG,          sB,    cB*cG];
+  // rear camera looks along device -Z; world frame is x east, y north, z up
+  var vx=-R[2], vy=-R[5], vz=-R[8];
+  alt=Math.asin(Math.max(-1,Math.min(1,vz)))*R2D;
+  azRel=mod(Math.atan2(vx,vy)*R2D,360);
+  haveOri=true;
+
+  if(isAbs){ compassOffset=0; compassAcc=null; }
+  else if(typeof e.webkitCompassHeading==='number' && !isNaN(e.webkitCompassHeading)){
+    var acc=e.webkitCompassAccuracy; compassAcc=(typeof acc==='number')?acc:null;
+    // calibrate only while not recording, so compass jitter never bends the line
+    if(!recording && Math.abs(alt)<45 && !(acc<0)){
+      var target=angDiff(e.webkitCompassHeading,azRel);
+      if(compassOffset==null) compassOffset=target;
+      else compassOffset=angDiff(compassOffset+angDiff(target,compassOffset)*0.06,0);
+    }
+  }
+  if(recording) sample();
+}
+function onMotion(e){
+  var r=e.rotationRate;
+  if(r&&r.alpha!=null){ var m=Math.sqrt(r.alpha*r.alpha+r.beta*r.beta+r.gamma*r.gamma); gyroRate=gyroRate==null?m:gyroRate*0.8+m*0.2; }
+  var g=e.accelerationIncludingGravity;
+  if(g&&g.x!=null){ var n=Math.sqrt(g.x*g.x+g.y*g.y+g.z*g.z)/9.80665; accelG=accelG==null?n:accelG*0.8+n*0.2; }
+}
+
+/* ---------- recording ---------- */
+function setBin(az,al){ bins[mod(Math.round(az),360)]=al; }
+function sample(){
+  if(alt>80) { lastAz=null; return; }           // azimuth is meaningless near the zenith
+  var az=curAz();
+  if(lastAz!=null){
+    var d=angDiff(az,lastAz);
+    if(Math.abs(d)<25){
+      var n=Math.max(1,Math.ceil(Math.abs(d)));
+      for(var k=1;k<=n;k++){var t=k/n; setBin(lastAz+d*t,lastAlt+(alt-lastAlt)*t);}
+    } else setBin(az,alt);
+  } else setBin(az,alt);
+  lastAz=az; lastAlt=alt;
+  if(autoStop && coverage()===360){ stopRec(); toast('Full circle captured'); }
+}
+function startRec(){
+  if(!haveOri){toast('No motion data yet');return;}
+  recording=true; lastAz=null; lastAlt=null; autoStop=coverage()<360;
+  $('rec').classList.add('on'); $('rec').setAttribute('aria-label','Stop sweep'); $('recChip').style.display='';
+  $('recLabel').textContent='Turn slowly. Keep the crosshair on the skyline. Tap to stop.';
+}
+function stopRec(){
+  recording=false; saveBins();
+  $('rec').classList.remove('on'); $('rec').setAttribute('aria-label','Start sweep'); $('recChip').style.display='none';
+  var c=coverage();
+  $('recLabel').textContent=c===360?'Done. Export, or tap again to redraw any part.':(c?'Tap to continue. Sweep over any part to redraw it.':'Aim the crosshair at the skyline, then tap to start');
+  updateButtons();
+}
+function updateButtons(){
+  var c=coverage(); $('expBtn').disabled=c===0; $('expBtn').classList.toggle('ready',c===360);
+}
+
+/* ---------- export ---------- */
+function filled(){
+  var out=new Float64Array(360), idx=[];
+  for(var i=0;i<360;i++) if(!isNaN(bins[i])) idx.push(i);
+  if(!idx.length) return null;
+  for(var j=0;j<idx.length;j++){
+    var a=idx[j], b=idx[(j+1)%idx.length], span=mod(b-a,360)||360;
+    for(var k=0;k<span;k++){ var t=k/span; out[(a+k)%360]=bins[a]+(bins[b]-bins[a])*t; }
+  }
+  return out;
+}
+function buildHrz(step,smooth,useMax,clamp){
+  var f=filled(); if(!f) return '';
+  var i,k;
+  if(smooth){ var s=new Float64Array(360); for(i=0;i<360;i++){var sum=0;for(k=-2;k<=2;k++)sum+=f[mod(i+k,360)];s[i]=sum/5;} f=s; }
+  var lines=[], h=Math.floor(step/2);
+  for(var az=0;az<360;az+=step){
+    var v=f[az];
+    if(useMax&&step>1){ for(k=-h;k<=h;k++) v=Math.max(v,f[mod(az+k,360)]); }
+    if(clamp&&v<0) v=0;
+    lines.push(az+' '+(Math.round(v*10)/10).toFixed(1));
+  }
+  return lines.join('\r\n')+'\r\n';
+}
+function refreshExport(){
+  var txt=buildHrz(+$('stepSel').value,$('smoothChk').checked,$('maxChk').checked,$('clampChk').checked);
+  $('expTxt').value=txt;
+  var c=coverage();
+  $('expInfo').textContent=c+' of 360° measured'+(c<360?'. Missing parts are filled with a straight line between the nearest measured points.':'.')+
+    (manualOffset!=null?' Heading set from a known target.':(compassOffset!=null?' Compass heading with declination '+decl.toFixed(1)+'°.':' Warning: no compass heading, azimuths are relative to where the page started.'));
+}
+function download(txt){
+  var url=URL.createObjectURL(new Blob([txt],{type:'text/plain'}));
+  var a=document.createElement('a'); a.href=url; a.download='horizon.hrz'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(function(){URL.revokeObjectURL(url);},4000);
+}
+
+/* ---------- drawing ---------- */
+var hud=$('hud'), hctx=hud.getContext('2d'), chart=$('chart'), cctx=chart.getContext('2d');
+var W=0,H=0,dpr=1;
+function resize(){
+  dpr=Math.min(window.devicePixelRatio||1,3); W=window.innerWidth; H=window.innerHeight;
+  hud.width=Math.round(W*dpr); hud.height=Math.round(H*dpr);
+  var r=chart.getBoundingClientRect(); chart.width=Math.round(r.width*dpr); chart.height=Math.round(r.height*dpr);
+}
+window.addEventListener('resize',resize); window.addEventListener('orientationchange',function(){setTimeout(resize,300);});
+
+function screenAngle(){
+  if(typeof window.orientation==='number') return window.orientation;
+  if(screen.orientation&&typeof screen.orientation.angle==='number'){var a=screen.orientation.angle;return a>180?a-360:a;}
+  return 0;
+}
+var proj={f:1,ca:1,sa:0,off:0};
+function project(azTrue,altDeg){
+  var azr=(azTrue-proj.off)*D2R, al=altDeg*D2R, c=Math.cos(al);
+  var wx=Math.sin(azr)*c, wy=Math.cos(azr)*c, wz=Math.sin(al);
+  var dx=R[0]*wx+R[3]*wy+R[6]*wz, dy=R[1]*wx+R[4]*wy+R[7]*wz, dz=R[2]*wx+R[5]*wy+R[8]*wz;
+  if(dz>-0.2) return null;
+  var sx=dx*proj.ca-dy*proj.sa, sy=dx*proj.sa+dy*proj.ca;
+  return [W/2+proj.f*sx/(-dz), H/2-proj.f*sy/(-dz)];
+}
+function polyline(ctx,pts){ // pts may contain nulls, which break the line
+  var pen=false; ctx.beginPath();
+  for(var i=0;i<pts.length;i++){var p=pts[i]; if(!p){pen=false;continue;} if(pen) ctx.lineTo(p[0],p[1]); else {ctx.moveTo(p[0],p[1]);pen=true;}}
+  ctx.stroke();
+}
+var CARD={0:'N',45:'NE',90:'E',135:'SE',180:'S',225:'SW',270:'W',315:'NW'};
+
+function drawHud(){
+  var ctx=hctx; ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  if(!R) return;
+  var sa=screenAngle()*D2R; proj.ca=Math.cos(sa); proj.sa=Math.sin(sa); proj.off=offset();
+  proj.f=(Math.max(W,H)/2)/Math.tan(fovLong*D2R/2);
+  var az0=curAz(), i, a, p, pts;
+
+  // altitude grid
+  ctx.lineWidth=1; ctx.font='11px ui-monospace,Menlo,monospace'; ctx.textAlign='left'; ctx.textBaseline='middle';
+  for(var al=-10;al<=80;al+=10){
+    pts=[]; for(a=-75;a<=75;a+=3) pts.push(project(az0+a,al));
+    ctx.strokeStyle=al===0?'rgba(255,255,255,.75)':'rgba(255,255,255,.22)';
+    ctx.setLineDash(al===0?[8,6]:[]); polyline(ctx,pts); ctx.setLineDash([]);
+    p=project(az0-14,al);
+    if(p){ ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(p[0]-2,p[1]-8,30,16); ctx.fillStyle='rgba(255,255,255,.85)'; ctx.fillText(al+'°',p[0]+2,p[1]); }
+  }
+  // azimuth ticks on the 0° line
+  ctx.textAlign='center'; ctx.textBaseline='top';
+  var first=Math.ceil((az0-75)/5)*5;
+  for(a=first;a<=az0+75;a+=5){
+    var m=mod(a,360), major=m%15===0;
+    var p1=project(a,0), p2=project(a,major?-2:-1);
+    if(!p1||!p2) continue;
+    ctx.strokeStyle='rgba(255,255,255,.8)'; ctx.beginPath(); ctx.moveTo(p1[0],p1[1]); ctx.lineTo(p2[0],p2[1]); ctx.stroke();
+    if(major){
+      var lab=CARD[m]||String(m), p3=project(a,-2.6); if(!p3) continue;
+      ctx.font=(CARD[m]?'700 14px ':'11px ')+'ui-monospace,Menlo,monospace';
+      var tw=ctx.measureText(lab).width;
+      ctx.fillStyle='rgba(0,0,0,.55)'; ctx.fillRect(p3[0]-tw/2-3,p3[1]-2,tw+6,CARD[m]?18:15);
+      ctx.fillStyle=CARD[m]?'#ffb000':'rgba(255,255,255,.9)'; ctx.fillText(lab,p3[0],p3[1]);
+    }
+  }
+
+  // captured horizon: shaded below, bright line on top
+  var top=new Array(361), low=new Array(361);
+  for(i=0;i<=360;i++){ var bi=i%360; if(isNaN(bins[bi])){top[i]=null;low[i]=null;continue;}
+    if(Math.abs(angDiff(bi,az0))>80){top[i]=null;low[i]=null;continue;}
+    top[i]=project(bi,bins[bi]); low[i]=project(bi,Math.min(bins[bi]-1,-12)); }
+  ctx.fillStyle='rgba(255,176,0,.20)';
+  for(i=0;i<360;i++){ if(top[i]&&top[i+1]&&low[i]&&low[i+1]){ ctx.beginPath(); ctx.moveTo(top[i][0],top[i][1]); ctx.lineTo(top[i+1][0],top[i+1][1]); ctx.lineTo(low[i+1][0],low[i+1][1]); ctx.lineTo(low[i][0],low[i][1]); ctx.closePath(); ctx.fill(); } }
+  ctx.lineJoin='round'; ctx.lineCap='round';
+  ctx.strokeStyle='rgba(0,0,0,.7)'; ctx.lineWidth=6; polyline(ctx,top);
+  ctx.strokeStyle='#ffb000'; ctx.lineWidth=3; polyline(ctx,top);
+
+  // crosshair
+  var cx=W/2, cy=H/2, col=recording?'#ff453a':'#ffffff';
+  ctx.lineWidth=4; ctx.strokeStyle='rgba(0,0,0,.6)'; cross(ctx,cx,cy);
+  ctx.lineWidth=2; ctx.strokeStyle=col; cross(ctx,cx,cy);
+  ctx.fillStyle=recording?'#ffb000':col; ctx.beginPath(); ctx.arc(cx,cy,3,0,6.3); ctx.fill();
+}
+function cross(ctx,cx,cy){
+  ctx.beginPath(); ctx.arc(cx,cy,16,0,6.3);
+  ctx.moveTo(cx-44,cy); ctx.lineTo(cx-22,cy); ctx.moveTo(cx+22,cy); ctx.lineTo(cx+44,cy);
+  ctx.moveTo(cx,cy-44); ctx.lineTo(cx,cy-22); ctx.moveTo(cx,cy+22); ctx.lineTo(cx,cy+44); ctx.stroke();
+}
+
+function drawChart(){
+  var ctx=cctx, w=chart.width/dpr, h=chart.height/dpr; ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+  var mx=20, i; for(i=0;i<360;i++) if(!isNaN(bins[i])&&bins[i]>mx) mx=bins[i];
+  if(haveOri&&alt>mx&&alt<80) mx=alt;
+  var top=Math.ceil((mx+5)/10)*10, padB=13, ph=h-padB;
+  function X(az){return az/360*w;} function Y(al){return ph-Math.max(0,Math.min(top,al))/top*ph;}
+  ctx.font='10px ui-monospace,Menlo,monospace'; ctx.textBaseline='top';
+  // grid
+  ctx.strokeStyle='rgba(255,255,255,.12)'; ctx.lineWidth=1;
+  for(var g=10;g<top;g+=10){ctx.beginPath();ctx.moveTo(0,Y(g));ctx.lineTo(w,Y(g));ctx.stroke();}
+  ctx.fillStyle='rgba(255,255,255,.55)'; ctx.textAlign='left'; ctx.fillText(top+'°',3,2);
+  var labs=[[0,'N'],[90,'E'],[180,'S'],[270,'W'],[360,'N']];
+  for(i=0;i<labs.length;i++){ var x=X(labs[i][0]); ctx.strokeStyle='rgba(255,255,255,.2)'; ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,ph);ctx.stroke();
+    ctx.textAlign=i===0?'left':(i===4?'right':'center'); ctx.fillStyle='rgba(255,255,255,.7)'; ctx.fillText(labs[i][1],i===0?3:(i===4?w-3:x),ph+2); }
+  // captured bars
+  var bw=w/360;
+  for(i=0;i<360;i++){ if(isNaN(bins[i])) continue; var y=Y(bins[i]);
+    ctx.fillStyle='rgba(255,176,0,.35)'; ctx.fillRect(X(i)-bw/2,y,bw+0.6,ph-y);
+    ctx.fillStyle='#ffb000'; ctx.fillRect(X(i)-bw/2,y-1,bw+0.6,2); }
+  ctx.strokeStyle='rgba(255,255,255,.4)'; ctx.beginPath(); ctx.moveTo(0,ph+.5); ctx.lineTo(w,ph+.5); ctx.stroke();
+  // cursor
+  if(haveOri){ var cxp=X(curAz()); ctx.strokeStyle=recording?'#ff453a':'#fff'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(cxp,0); ctx.lineTo(cxp,ph); ctx.stroke();
+    ctx.fillStyle=recording?'#ff453a':'#fff'; ctx.beginPath(); ctx.arc(cxp,Y(alt),3.5,0,6.3); ctx.fill(); }
+}
+
+var lastTxt=0;
+function frame(t){
+  drawHud(); drawChart();
+  if(t-lastTxt>120){ lastTxt=t;
+    if(haveOri){ $('azTxt').textContent=curAz().toFixed(1)+'°'; $('altTxt').textContent=(alt>=0?'+':'')+alt.toFixed(1)+'°'; }
+    var s='gyro '+(gyroRate==null?'–':gyroRate.toFixed(0)+'°/s')+' · accel '+(accelG==null?'–':accelG.toFixed(2)+' g');
+    if(recording&&gyroRate>60) s='Slow down · '+s;
+    $('sensTxt').textContent=s;
+    var chip=$('headChip'), txt=$('headTxt');
+    if(manualOffset!=null){chip.className='chip ok';txt.textContent='Heading: known target';}
+    else if(compassOffset!=null){
+      if(compassAcc!=null&&compassAcc>20){chip.className='chip warn';txt.textContent='Compass ±'+Math.round(compassAcc)+'° · recalibrate';}
+      else {chip.className='chip ok';txt.textContent='Compass'+(compassAcc!=null&&compassAcc>=0?' ±'+Math.round(compassAcc)+'°':'')+(decl?' · true N':' · magnetic N');}
+    } else if(haveOri){chip.className='chip bad';txt.textContent='No compass · set heading';}
+    $('covTxt').textContent=coverage()+' / 360° captured';
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ---------- UI ---------- */
+var toastT=null;
+function toast(m){var el=$('toast'); el.textContent=m; el.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(function(){el.classList.remove('show');},2200);}
+function openSheet(id){ if(recording) stopRec(); closeSheets(); $(id).classList.add('open'); }
+function closeSheets(){ var s=document.querySelectorAll('.sheet'); for(var i=0;i<s.length;i++) s[i].classList.remove('open'); }
+Array.prototype.forEach.call(document.querySelectorAll('[data-close]'),function(b){b.addEventListener('click',closeSheets);});
+
+$('rec').addEventListener('click',function(){ if(recording) stopRec(); else startRec(); });
+$('setBtn').addEventListener('click',function(){openSheet('setSheet');});
+$('expBtn').addEventListener('click',function(){refreshExport();openSheet('expSheet');});
+var clearArmed=0;
+$('clearBtn').addEventListener('click',function(){
+  var b=$('clearBtn');
+  if(Date.now()-clearArmed<3000){ for(var i=0;i<360;i++)bins[i]=NaN; saveBins(); clearArmed=0; b.textContent='Clear'; if(recording)stopRec(); else stopRec(); toast('Cleared'); }
+  else { clearArmed=Date.now(); b.textContent='Tap again to clear'; setTimeout(function(){b.textContent='Clear';},3000); }
+});
+
+$('declIn').value=decl; $('fovIn').value=fovLong; $('fovTxt').textContent=fovLong;
+$('declIn').addEventListener('input',function(){var v=parseFloat(this.value); decl=isNaN(v)?0:v; store('hrz.decl',decl);});
+$('fovIn').addEventListener('input',function(){fovLong=+this.value; $('fovTxt').textContent=fovLong; store('hrz.fov',fovLong);});
+$('syncBtn').addEventListener('click',function(){
+  var v=parseFloat($('syncIn').value);
+  if(isNaN(v)){toast('Type the target azimuth first');return;}
+  if(!haveOri){toast('No motion data yet');return;}
+  var old=offset(), had=headingKnown(); manualOffset=angDiff(v,azRel);
+  var shift=Math.round(angDiff(manualOffset,old));
+  if(coverage()&&shift){ // keep anything already captured lined up with the new heading
+    var nb=new Float32Array(360); for(var i=0;i<360;i++) nb[mod(i+shift,360)]=bins[i]; bins=nb; saveBins();
+  }
+  closeSheets(); toast('Heading set'+(had&&shift?' ('+(shift>0?'+':'')+shift+'° from compass)':''));
+});
+$('unsyncBtn').addEventListener('click',function(){ manualOffset=null; closeSheets(); toast('Using compass'); });
+
+['stepSel','smoothChk','maxChk','clampChk'].forEach(function(id){$(id).addEventListener('change',refreshExport);});
+$('dlBtn').addEventListener('click',function(){download($('expTxt').value);});
+$('shareBtn').addEventListener('click',function(){
+  var txt=$('expTxt').value, file=null;
+  try{ file=new File([txt],'horizon.hrz',{type:'text/plain'}); }catch(e){}
+  if(file&&navigator.canShare&&navigator.canShare({files:[file]})){
+    navigator.share({files:[file],title:'horizon.hrz'}).catch(function(err){ if(err&&err.name!=='AbortError') download(txt); });
+  } else download(txt);
+});
+$('copyBtn').addEventListener('click',function(){
+  var txt=$('expTxt').value;
+  function fallback(){ var t=$('expTxt'); t.focus(); t.select(); t.setSelectionRange(0,txt.length); try{document.execCommand('copy');toast('Copied');}catch(e){toast('Select the text and copy it');} }
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(function(){toast('Copied');},fallback); else fallback();
+});
+
+/* ---------- start ---------- */
+var wake=null;
+function keepAwake(){ if(navigator.wakeLock&&document.visibilityState==='visible') navigator.wakeLock.request('screen').then(function(w){wake=w;}).catch(function(){}); }
+document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'&&$('cover').style.display==='none') keepAwake(); else if(recording) stopRec(); });
+
+$('startBtn').addEventListener('click',function(){
+  var err=$('startErr'); err.textContent='';
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    err.textContent='The camera and motion sensors only work on a page served over https. Host this file on any https site and open it in Safari.'; return;
+  }
+  // iOS: both permission requests must start inside this tap
+  var pO=(window.DeviceOrientationEvent&&typeof DeviceOrientationEvent.requestPermission==='function')?DeviceOrientationEvent.requestPermission():Promise.resolve('granted');
+  var pM=(window.DeviceMotionEvent&&typeof DeviceMotionEvent.requestPermission==='function')?DeviceMotionEvent.requestPermission():Promise.resolve('granted');
+  var pC=navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
+  pO.catch(function(){return 'denied';}).then(function(o){
+    return pM.catch(function(){return 'denied';}).then(function(){
+      if(o!=='granted'){ pC.then(function(s){s.getTracks().forEach(function(t){t.stop();});}).catch(function(){});
+        throw new Error('Motion access was refused. Close this tab, reopen the page and tap Allow when Safari asks for Motion & Orientation.'); }
+      return pC.catch(function(){ throw new Error('Camera access was refused. Allow the camera for this site in Safari (aA menu → Website Settings), then reload.'); });
+    });
+  }).then(function(stream){
+    var v=$('cam'); v.srcObject=stream; var pl=v.play(); if(pl&&pl.catch) pl.catch(function(){});
+    window.addEventListener('deviceorientationabsolute',function(e){onOri(e,true);},true);
+    window.addEventListener('deviceorientation',function(e){onOri(e,e.absolute===true&&typeof e.webkitCompassHeading!=='number');},true);
+    window.addEventListener('devicemotion',onMotion,true);
+    $('cover').style.display='none'; resize(); keepAwake(); stopRec(); requestAnimationFrame(frame);
+    setTimeout(function(){ if(!haveOri) toast('No motion data from this device'); },2500);
+  }).catch(function(e){ err.textContent=e.message||String(e); });
+});
+})();
+</script>
+</body>
+</html>
