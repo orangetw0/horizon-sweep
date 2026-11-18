@@ -140,6 +140,16 @@ hr{border:0;border-top:1px solid var(--edge);margin:0;width:100%}
 <div class="sheet" id="setSheet" role="dialog" aria-label="Settings">
   <header><h2>Settings</h2><button class="x" type="button" data-close>Done</button></header>
   <div class="field">
+    <label for="impIn">Horizon file</label>
+    <div class="row">
+      <button class="btn" id="impBtn" type="button">Import .hrz file</button>
+      <button class="btn" id="newBtn" type="button">Start new horizon</button>
+      <input id="impIn" type="file" style="display:none">
+    </div>
+    <small>Import loads an existing horizon so you can see it on the camera and sweep over the parts you want to change. It replaces the line currently on screen. Start new erases the line and keeps your settings.</small>
+  </div>
+  <hr>
+  <div class="field">
     <label for="declIn">Magnetic declination (° east positive)</label>
     <div class="row"><input id="declIn" type="number" step="0.1" value="0" inputmode="decimal"></div>
     <small>The phone compass reads magnetic north. NINA expects true north. Enter your site's declination (west is negative).</small>
@@ -539,10 +549,51 @@ document.addEventListener('touchend',function(e){
 $('rec').addEventListener('click',function(){ if(recording) stopRec(); else startRec(); });
 $('setBtn').addEventListener('click',function(){openSheet('setSheet');});
 $('expBtn').addEventListener('click',function(){refreshExport();openSheet('expSheet');});
+function resetAll(){ for(var i=0;i<360;i++)bins[i]=NaN; saveBins(); stopRec(); }
+function parseHrz(txt){
+  var pts=[], lines=String(txt).split(/\r?\n|\r/);
+  for(var i=0;i<lines.length;i++){
+    var ln=lines[i].trim(); if(!ln||/^[#;\/]/.test(ln)) continue;
+    var tok=ln.split(/[\s;]+/); if(tok.length<2) tok=ln.split(',');
+    if(tok.length<2) continue;
+    var az=parseFloat(tok[0].replace(',','.')), al=parseFloat(tok[1].replace(',','.'));
+    if(isNaN(az)||isNaN(al)||al<-90||al>90||az<-360||az>720) continue;
+    pts.push([az>=360&&az%360===0&&pts.length?359.999:mod(az,360),al]);
+  }
+  pts.sort(function(a,b){return a[0]-b[0];});
+  return pts;
+}
+function importHrz(txt){
+  var pts=parseHrz(txt), n=pts.length;
+  if(!n){ toast('No azimuth and altitude pairs found in that file'); return; }
+  for(var d=0;d<360;d++){
+    var hi=0; while(hi<n&&pts[hi][0]<d) hi++;
+    var b=pts[hi%n], a=pts[(hi-1+n)%n];
+    var span=mod(b[0]-a[0],360), t=span>1e-9?mod(d-a[0],360)/span:0;
+    bins[d]=n===1?a[1]:a[1]+(b[1]-a[1])*Math.min(1,t);
+  }
+  saveBins(); stopRec(); closeSheets(); toast('Imported '+n+' points');
+}
+$('impBtn').addEventListener('click',function(){ $('impIn').value=''; $('impIn').click(); });
+$('impIn').addEventListener('change',function(){
+  var f=this.files&&this.files[0]; if(!f) return;
+  if(f.size>2e6){ toast('That file is too large to be a horizon file'); return; }
+  var r=new FileReader();
+  r.onload=function(){ importHrz(r.result); };
+  r.onerror=function(){ toast('Could not read that file'); };
+  r.readAsText(f);
+});
+var newArmed=0;
+$('newBtn').addEventListener('click',function(){
+  var b=$('newBtn');
+  if(!coverage()){ closeSheets(); toast('Nothing to erase. Ready for a new sweep.'); return; }
+  if(Date.now()-newArmed<3000){ newArmed=0; b.textContent='Start new horizon'; resetAll(); closeSheets(); toast('Ready for a new sweep'); }
+  else { newArmed=Date.now(); b.textContent='Tap again to erase'; setTimeout(function(){b.textContent='Start new horizon';},3000); }
+});
 var clearArmed=0;
 $('clearBtn').addEventListener('click',function(){
   var b=$('clearBtn');
-  if(Date.now()-clearArmed<3000){ for(var i=0;i<360;i++)bins[i]=NaN; saveBins(); clearArmed=0; b.textContent='Clear'; if(recording)stopRec(); else stopRec(); toast('Cleared'); }
+  if(Date.now()-clearArmed<3000){ clearArmed=0; b.textContent='Clear'; resetAll(); toast('Cleared'); }
   else { clearArmed=Date.now(); b.textContent='Tap again to clear'; setTimeout(function(){b.textContent='Clear';},3000); }
 });
 
